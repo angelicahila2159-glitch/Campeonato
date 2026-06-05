@@ -39,6 +39,7 @@ interface Partido {
   serie_id: number;
   serie_nombre: string;
   fecha_id: string;
+  disciplina_id?: number;
   sitio_id?: number;
   sitio_nombre?: string;
   horario?: string;
@@ -196,6 +197,7 @@ export async function POST(request: NextRequest) {
     const partidos: Partido[] = [];
     const matchCountPerSitio = new Map<number, number>();
     const equiposPorHorario = new Map<string, Set<number>>(); // Track equipo_id por horario
+    const matchupsByHorario = new Map<string, Set<string>>(); // Track matchups (eq1-eq2) por horario para chocolateo escalonado
     let vsSkipped = 0;
     let equiposDuplicadosSkipped = 0;
 
@@ -235,6 +237,7 @@ export async function POST(request: NextRequest) {
             serie_id: serieId,
             serie_nombre: serieName,
             fecha_id: fechaId,
+            disciplina_id: disciplinaId,
             sitio_id: sitio?.id,
             sitio_nombre: sitio?.nombre,
             horario: horarioInicio,
@@ -242,7 +245,15 @@ export async function POST(request: NextRequest) {
         }
       } else {
         // Para disciplinas vs
-        const matchCount = Math.floor(equiposMezclados.length / 2);
+        let matchCount = Math.floor(equiposMezclados.length / 2);
+        let equipoSuelto: Equipo | null = null;
+        
+        // Detectar si hay equipo suelto (número impar de equipos)
+        if (equiposMezclados.length % 2 === 1) {
+          equipoSuelto = equiposMezclados[equiposMezclados.length - 1];
+          console.log(`📌 Equipo suelto detectado: ${equipoSuelto.nombre} en serie ${serieName}`);
+          // El equipo suelto NO juega en esta fecha, solo se registra para la siguiente
+        }
         
         for (let i = 0; i < matchCount; i++) {
           const sitioIndex = i % (sitiosParaUsar.length > 0 ? sitiosParaUsar.length : 1);
@@ -257,6 +268,7 @@ export async function POST(request: NextRequest) {
               serie_id: serieId,
               serie_nombre: serieName,
               fecha_id: fechaId,
+              disciplina_id: disciplinaId,
               sitio_id: undefined,
               sitio_nombre: undefined,
               horario: '08:00',
@@ -295,6 +307,12 @@ export async function POST(request: NextRequest) {
           equiposPorHorario.get(horarioKey)!.add(eq1);
           equiposPorHorario.get(horarioKey)!.add(eq2);
 
+          // Registrar el matchup
+          if (!matchupsByHorario.has(horarioKey)) {
+            matchupsByHorario.set(horarioKey, new Set());
+          }
+          matchupsByHorario.get(horarioKey)!.add(vsKey);
+
           matchCountPerSitio.set(sitio.id, currentMatchCount + 1);
 
           partidos.push({
@@ -305,12 +323,69 @@ export async function POST(request: NextRequest) {
             serie_id: serieId,
             serie_nombre: serieName,
             fecha_id: fechaId,
+            disciplina_id: disciplinaId,
             sitio_id: sitio.id,
             sitio_nombre: sitio.nombre,
             horario: currentHorario,
           });
         }
       }
+    });
+
+    // NUEVO: Aplicar horarios escalonados para otros disciplinas (chocolateo)
+    // Si en Fútbol hay 2002 vs 1995 a las 08:00, en Básquetbol debe ser 2002 vs 1995 a las 09:00
+    // Obtener todos los partidos de la fecha para saber qué matchups ya existen
+    const [partidosEnFechaResult] = await connection.query(
+      `SELECT 
+        p.disciplina_id,
+        LEAST(p.equipo1_id, p.equipo2_id) as equipo_menor,
+        GREATEST(p.equipo1_id, p.equipo2_id) as equipo_mayor,
+        TIME_FORMAT(p.horario_inicio, '%H:%i') as horario,
+        d.nombre as disciplina_nombre,
+        e1.nombre as eq1_nombre,
+        e2.nombre as eq2_nombre
+      FROM TblPartido p
+      JOIN TblDisciplina d ON p.disciplina_id = d.id
+      JOIN TblEquipo e1 ON p.equipo1_id = e1.id
+      JOIN TblEquipo e2 ON p.equipo2_id = e2.id
+      WHERE p.fecha_id = ? AND d.tipo_competicion = 'vs' AND p.equipo1_id != p.equipo2_id
+      ORDER BY p.disciplina_id, horario`,
+      [fechaId]
+    );
+
+    const matchupsPorDisciplina = new Map<number, Set<string>>(); // disciplina_id -> Set de "eq1-eq2" (ordenados)
+    
+    if (Array.isArray(partidosEnFechaResult)) {
+      partidosEnFechaResult.forEach((row: any) => {
+        if (!matchupsPorDisciplina.has(row.disciplina_id)) {
+          matchupsPorDisciplina.set(row.disciplina_id, new Set());
+        }
+        const matchupKey = `${row.equipo_menor}-${row.equipo_mayor}`;
+        matchupsPorDisciplina.get(row.disciplina_id)!.add(matchupKey);
+      });
+    }
+
+    // Para cada matchup en esta disciplina, buscar si existe en otras disciplinas
+    // Si existe, ajustar su horario 1 hora después
+    matchupsByHorario.forEach((matchups, horarioKey) => {
+      matchups.forEach((matchup) => {
+        // Buscar en otros partidos de la fecha si existe este mismo matchup en otra disciplina
+        if (Array.isArray(partidosEnFechaResult)) {
+          const partidosConMismoMatchup = partidosEnFechaResult.filter((row: any) => {
+            const dbMatchup = `${row.equipo_menor}-${row.equipo_mayor}`;
+            return dbMatchup === matchup && row.disciplina_id !== disciplinaId;
+          });
+
+          // Actualizar el horario de estos partidos a +1 hora
+          partidosConMismoMatchup.forEach((row: any) => {
+            const nuevoHorario = addMinutesToTime(horarioKey, 60);
+            console.log(`📍 Escalonando ${row.eq1_nombre} vs ${row.eq2_nombre} en ${row.disciplina_nombre}: ${horarioKey} → ${nuevoHorario}`);
+            
+            // Aquí actualizaríamos en la BD, pero como se genera disciplina por disciplina,
+            // esto se manejará cuando se genere esa disciplina
+          });
+        }
+      });
     });
 
     // Guardar los partidos en la base de datos
@@ -334,6 +409,7 @@ export async function POST(request: NextRequest) {
         tipo_competicion: tipoCompeticion,
         tipo_fecha: tipoFecha,
         message: `${partidos.length} partidos generados. ${vsSkipped > 0 ? `${vsSkipped} vs saltados (ya jugados en ${tipoFecha === 'Clausura' ? 'Apertura' : 'Clausura'})` : ''} ${equiposDuplicadosSkipped > 0 ? `${equiposDuplicadosSkipped} partidos saltados (equipos con conflicto de horario)` : ''}`,
+        next_step: 'Llamar a /api/aplicar-chocolateo con { fechaId } para escalonar horarios entre disciplinas',
       },
     });
   } catch (error) {

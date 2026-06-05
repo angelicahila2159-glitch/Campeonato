@@ -68,6 +68,11 @@ export function PartidosSection() {
   const [partidosDB, setPartidosDB] = useState<PartidoDB[]>([]);
   const [partidosLoading, setPartidosLoading] = useState(false);
 
+  // Estado para equipos sueltos
+  const [equiposSueltos, setEquiposSueltos] = useState<any[]>([]);
+  const [showEquiposSueltosModal, setShowEquiposSueltosModal] = useState(false);
+  const [generandoEquiposSueltos, setGenerandoEquiposSueltos] = useState(false);
+
   // Estado para modal de resultado
   const [showResultadoModal, setShowResultadoModal] = useState(false);
   const [editingPartido, setEditingPartido] = useState<PartidoDB | null>(null);
@@ -146,7 +151,7 @@ export function PartidosSection() {
           fechaId: selectedFechaId,
           disciplinaId: selectedDisciplinaId,
           sitioId: selectedSitioId,
-          seriesIds: Array.from(selectedSeriesIds),  // Enviar series seleccionadas
+          seriesIds: Array.from(selectedSeriesIds),
         }),
       });
 
@@ -154,6 +159,42 @@ export function PartidosSection() {
 
       if (response.ok) {
         setGeneratedPartidos(data.data.partidos);
+        
+        // Aplicar chocolateo (escalonar horarios entre disciplinas)
+        try {
+          const chocolateoResponse = await fetch('/api/aplicar-chocolateo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fechaId: selectedFechaId }),
+          });
+          
+          const chocolateoData = await chocolateoResponse.json();
+          if (chocolateoData.success) {
+            console.log('✓ Chocolateo aplicado:', chocolateoData.data.actualizacionesRealizadas, 'partidos escalonados');
+          }
+        } catch (error) {
+          console.error('Error aplicando chocolateo:', error);
+        }
+        
+        // Detectar equipos sueltos en TODAS las series generadas
+        const sueltosDetectados = [];
+        for (const serieId of selectedSeriesIds) {
+          try {
+            const sueltosResponse = await fetch(`/api/equipos-pendientes?fechaId=${selectedFechaId}&disciplinaId=${selectedDisciplinaId}`);
+            const sueltosData = await sueltosResponse.json();
+            if (sueltosData.success && sueltosData.data.equiposSueltos.length > 0) {
+              sueltosDetectados.push(...sueltosData.data.equiposSueltos);
+            }
+          } catch (error) {
+            console.error('Error detectando equipos sueltos:', error);
+          }
+        }
+        
+        if (sueltosDetectados.length > 0) {
+          setEquiposSueltos(sueltosDetectados);
+          setShowEquiposSueltosModal(true);
+        }
+        
         // Recargar la tabla de partidos
         const refreshResponse = await fetch('/api/partidos');
         const refreshData = await refreshResponse.json();
@@ -164,7 +205,6 @@ export function PartidosSection() {
         // Cerrar el modal automáticamente después de generar exitosamente
         setTimeout(() => {
           setShowChocolateModal(false);
-          // Resetear todos los estados del formulario
           setSelectedFechaId('');
           setSelectedDisciplinaId('');
           setSelectedSitioId('');
@@ -658,6 +698,56 @@ export function PartidosSection() {
                   className="flex-1"
                 >
                   Cancelar
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Modal Equipos Sueltos */}
+      {showEquiposSueltosModal && equiposSueltos.length > 0 && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-lg">
+            <CardContent className="pt-6 space-y-4">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 mb-2">⚠️ Equipos Sueltos Detectados</h2>
+                <p className="text-sm text-slate-600">
+                  Se detectaron equipos sin pareja en esta fecha. Estos equipos DEBEN jugar en la siguiente fecha.
+                </p>
+              </div>
+
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-2">
+                <p className="font-semibold text-yellow-900">
+                  🏠 {equiposSueltos.length} equipo(s) sin pareja:
+                </p>
+                <div className="space-y-1">
+                  {equiposSueltos.map((equipo, idx) => (
+                    <div key={idx} className="text-sm text-yellow-800 flex items-center gap-2">
+                      <span className="font-medium">{equipo.nombre}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+                <p className="font-semibold mb-2">📋 Próximos pasos:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Genera los partidos de la siguiente fecha</li>
+                  <li>Este sistema automáticamente te notificará si hay equipos sin pareja</li>
+                  <li>Usa el botón "🎯 Generar Partido Obligatorio" para crear su partido</li>
+                </ul>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => {
+                    setShowEquiposSueltosModal(false);
+                    setEquiposSueltos([]);
+                  }}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  ✓ Entendido
                 </Button>
               </div>
             </CardContent>
