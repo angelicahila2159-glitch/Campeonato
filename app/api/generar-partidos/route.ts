@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mysql from 'mysql2/promise';
+import { addMinutesToTime, calcularMinutosEntre } from '@/lib/time-utils';
 
 const dbConfig = {
   host: process.env.DB_HOST,
@@ -179,18 +180,14 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    // Helper function to add minutes to a time string
-    const addMinutesToTime = (timeStr: string, minutes: number): string => {
-      const [hours, mins] = timeStr.split(':').map(Number);
-      let totalMinutes = hours * 60 + mins + minutes;
-      
-      // Handle day overflow (max 24 hours = 1440 minutes)
-      totalMinutes = totalMinutes % 1440;
-      
-      const newHours = Math.floor(totalMinutes / 60);
-      const newMins = totalMinutes % 60;
-      
-      return `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}`;
+    // Helper function to shuffle array
+    const shuffleArray = (arr: any[]): any[] => {
+      const shuffled = [...arr];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled;
     };
 
     // Generar partidos (Chocolate) para cada serie con horarios escalonados
@@ -343,12 +340,6 @@ export async function POST(request: NextRequest) {
           }
 
           // VALIDACIÓN: Verificar conflicto de 90 minutos entre Fútbol y Básquetbol SOLAMENTE
-          const calcularMinutosEntre = (hora1: string, hora2: string): number => {
-            const [h1, m1] = hora1.split(':').map(Number);
-            const [h2, m2] = hora2.split(':').map(Number);
-            return Math.abs((h2 * 60 + m2) - (h1 * 60 + m1));
-          };
-
           // Solo validar conflictos si NO es un matchup exacto (para matchups exactos, ya está garantizado +90 min)
           let tieneConflicto = false;
           

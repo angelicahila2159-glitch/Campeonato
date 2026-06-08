@@ -177,18 +177,8 @@ export function PartidosSection() {
         }
       }
 
-      // MEZCLAR los partidos aleatoriamente
-      const shuffle = (arr: any[]) => {
-        const shuffled = [...arr];
-        for (let i = shuffled.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-        }
-        return shuffled;
-      };
-
-      const partidosMezclados = shuffle(todosLosPartidos);
-      setGeneratedPartidos(partidosMezclados);
+      // Los partidos se mostrarán mezclados cuando se recargue desde la BD con randomOrder=true
+      setGeneratedPartidos(todosLosPartidos);
 
       // Aplicar chocolateo (escalonar horarios entre disciplinas)
       try {

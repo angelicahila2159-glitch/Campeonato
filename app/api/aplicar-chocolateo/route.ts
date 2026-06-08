@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mysql from 'mysql2/promise';
+import { addMinutesToTime } from '@/lib/time-utils';
 
 const dbConfig = {
   host: process.env.DB_HOST,
@@ -7,20 +8,6 @@ const dbConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-};
-
-// Helper function to add minutes to a time string
-const addMinutesToTime = (timeStr: string, minutes: number): string => {
-  const [hours, mins] = timeStr.split(':').map(Number);
-  let totalMinutes = hours * 60 + mins + minutes;
-  
-  // Handle day overflow (max 24 hours = 1440 minutes)
-  totalMinutes = totalMinutes % 1440;
-  
-  const newHours = Math.floor(totalMinutes / 60);
-  const newMins = totalMinutes % 60;
-  
-  return `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}`;
 };
 
 export async function POST(request: NextRequest) {
