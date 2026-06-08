@@ -491,7 +491,7 @@ export function PartidosSection() {
                       <input
                         type="checkbox"
                         checked={selectedDisciplinaIds.has(disciplina.id)}
-                        onChange={(e) => {
+                        onChange={async (e) => {
                           const newIds = new Set(selectedDisciplinaIds);
                           if (e.target.checked) {
                             newIds.add(disciplina.id);
@@ -499,10 +499,43 @@ export function PartidosSection() {
                             newIds.delete(disciplina.id);
                           }
                           setSelectedDisciplinaIds(newIds);
-                          setSitios([]);
-                          setSeries([]);
                           setSelectedSitioId('');
                           setSelectedSeriesIds(new Set());
+                          
+                          // Cargar sitios disponibles para las disciplinas seleccionadas
+                          if (newIds.size > 0) {
+                            try {
+                              setSitiosLoading(true);
+                              const allSitios = new Set<number>();
+                              
+                              // Obtener sitios de todas las disciplinas seleccionadas
+                              for (const discId of Array.from(newIds)) {
+                                const response = await fetch(`/api/sitios?disciplinaId=${discId}`);
+                                const data = await response.json();
+                                if (data.success && Array.isArray(data.data)) {
+                                  data.data.forEach((sitio: any) => {
+                                    allSitios.add(sitio.id);
+                                  });
+                                }
+                              }
+                              
+                              // Obtener detalles de todos los sitios únicos
+                              const sitiosResponse = await fetch('/api/sitios');
+                              const sitiosData = await sitiosResponse.json();
+                              if (sitiosData.success && Array.isArray(sitiosData.data)) {
+                                const filteredSitios = sitiosData.data.filter((s: any) => allSitios.has(s.id));
+                                setSitios(filteredSitios);
+                              }
+                            } catch (error) {
+                              console.error('Error cargando sitios:', error);
+                              setSitios([]);
+                            } finally {
+                              setSitiosLoading(false);
+                            }
+                          } else {
+                            setSitios([]);
+                            setSeries([]);
+                          }
                         }}
                         className="w-4 h-4"
                       />
@@ -512,7 +545,7 @@ export function PartidosSection() {
                 </div>
               </div>
 
-              {selectedDisciplinaIds.size > 0 && sitios.length > 0 && (
+              {selectedDisciplinaIds.size > 0 && (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
                     Selecciona el Sitio
@@ -569,34 +602,38 @@ export function PartidosSection() {
                 </div>
               )}
 
-              {selectedSitioId && series.length > 0 && (
+              {selectedSitioId && (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
                     Selecciona las Series a Chocolatear
                   </label>
                   <div className="space-y-2 bg-slate-50 p-3 rounded-lg max-h-48 overflow-y-auto">
-                    {series.map(serie => (
-                      <div key={serie.id} className="flex items-center">
-                        <input
-                          type="checkbox"
-                          id={`serie-${serie.id}`}
-                          checked={selectedSeriesIds.has(serie.id)}
-                          onChange={(e) => {
-                            const newSet = new Set(selectedSeriesIds);
-                            if (e.target.checked) {
-                              newSet.add(serie.id);
-                            } else {
-                              newSet.delete(serie.id);
-                            }
-                            setSelectedSeriesIds(newSet);
-                          }}
-                          className="w-4 h-4 text-amber-600 rounded cursor-pointer"
-                        />
-                        <label htmlFor={`serie-${serie.id}`} className="ml-2 text-sm font-medium text-slate-700 cursor-pointer">
-                          {serie.nombre}
-                        </label>
-                      </div>
-                    ))}
+                    {series.length > 0 ? (
+                      series.map(serie => (
+                        <div key={serie.id} className="flex items-center">
+                          <input
+                            type="checkbox"
+                            id={`serie-${serie.id}`}
+                            checked={selectedSeriesIds.has(serie.id)}
+                            onChange={(e) => {
+                              const newSet = new Set(selectedSeriesIds);
+                              if (e.target.checked) {
+                                newSet.add(serie.id);
+                              } else {
+                                newSet.delete(serie.id);
+                              }
+                              setSelectedSeriesIds(newSet);
+                            }}
+                            className="w-4 h-4 text-amber-600 rounded cursor-pointer"
+                          />
+                          <label htmlFor={`serie-${serie.id}`} className="ml-2 text-sm font-medium text-slate-700 cursor-pointer">
+                            {serie.nombre}
+                          </label>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-600">Cargando series...</p>
+                    )}
                   </div>
                   <p className="text-xs text-slate-600 mt-2">
                     Los partidos de cada serie se escalonarán automáticamente en el sitio sin solapamientos.
