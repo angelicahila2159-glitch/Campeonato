@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
     connection = await mysql.createConnection(dbConfig);
 
-    // Obtener todos los partidos VS de esta fecha agrupados por matchup
+    // Obtener todos los partidos VS de esta fecha agrupados por matchup Y disciplina
     const [partidosResult] = await connection.query(
       `SELECT 
         p.id,
@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
         p.equipo2_id,
         e1.nombre as eq1_nombre,
         e2.nombre as eq2_nombre,
-        TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_actual
+        TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_actual,
+        p.sitio_id
       FROM TblPartido p
       JOIN TblDisciplina d ON p.disciplina_id = d.id
       JOIN TblEquipo e1 ON p.equipo1_id = e1.id
@@ -69,54 +70,64 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Agrupar por matchup (eq_menor-eq_mayor)
-    const matchupsByDisciplina = new Map<string, any[]>(); // "eq1-eq2" -> [{disciplina_id, partido_id, ...}]
+    // Agrupar por matchup (eq_menor-eq_mayor) INCLUYENDO disciplina y sitio
+    const matchupsByKey = new Map<string, any[]>(); // "eq1-eq2" -> [{disciplina_id, partido_id, horario, ...}]
 
     partidosResult.forEach((row: any) => {
       const matchupKey = `${row.equipo_menor}-${row.equipo_mayor}`;
-      if (!matchupsByDisciplina.has(matchupKey)) {
-        matchupsByDisciplina.set(matchupKey, []);
+      if (!matchupsByKey.has(matchupKey)) {
+        matchupsByKey.set(matchupKey, []);
       }
-      matchupsByDisciplina.get(matchupKey)!.push(row);
+      matchupsByKey.get(matchupKey)!.push(row);
     });
 
-    // Para cada matchup, si existe en múltiples disciplinas, escalonar horarios
+    // Para cada matchup que aparece en FÚTBOL Y BÁSQUETBOL
     let actualizacionesRealizadas = 0;
     const detallesActualizacion = [];
 
-    matchupsByDisciplina.forEach((partidos, matchupKey) => {
-      if (partidos.length > 1) {
-        // Ordenar por horario actual
-        partidos.sort((a, b) => {
-          const [ha, ma] = a.horario_actual.split(':').map(Number);
-          const [hb, mb] = b.horario_actual.split(':').map(Number);
-          return (ha * 60 + ma) - (hb * 60 + mb);
-        });
+    for (const [matchupKey, partidos] of matchupsByKey.entries()) {
+      // Solo procesar si hay exactamente 2 partidos (Fútbol + Básquetbol)
+      if (partidos.length === 2) {
+        // Verificar que sean Fútbol y Básquetbol
+        const disciplinas = partidos.map(p => p.disciplina_nombre);
+        const esFootballYBasket = 
+          (disciplinas.includes('Futbito') && disciplinas.includes('Basquetbol')) ||
+          (disciplinas.includes('Futbito') && disciplinas.includes('Basquetbol'));
+        
+        if (esFootballYBasket) {
+          // Ordenar: primero Fútbol, luego Básquetbol (así Fútbol es la referencia)
+          partidos.sort((a, b) => {
+            const orderMap: { [key: string]: number } = { 'Futbito': 0, 'Basquetbol': 1 };
+            return (orderMap[a.disciplina_nombre] || 99) - (orderMap[b.disciplina_nombre] || 99);
+          });
 
-        // El primero mantiene su horario, los demás se escalonan +60 minutos cada uno
-        for (let i = 1; i < partidos.length; i++) {
-          const partido = partidos[i];
-          const horarioAnterior = partidos[i - 1].horario_actual;
-          const nuevoHorario = addMinutesToTime(horarioAnterior, 60);
+          const futbol = partidos[0]; // Referencia (Fútbol)
+          const basquet = partidos[1]; // A escalonar (Básquetbol)
+
+          // Escalonar 90 minutos respecto al Fútbol
+          const nuevoHorario = addMinutesToTime(futbol.horario_actual, 90);
 
           detallesActualizacion.push({
             matchup: matchupKey,
-            disciplina: partido.disciplina_nombre,
-            equipos: `${partido.eq1_nombre} vs ${partido.eq2_nombre}`,
-            horario_anterior: partido.horario_actual,
-            horario_nuevo: nuevoHorario,
+            equipos: `${futbol.eq1_nombre} vs ${futbol.eq2_nombre}`,
+            futbol_horario: futbol.horario_actual,
+            basquet_horario_anterior: basquet.horario_actual,
+            basquet_horario_nuevo: nuevoHorario,
+            razon: `Mismo matchup en ambas disciplinas: Basquetbol escalonado 90 min después de Fútbol`,
           });
 
-          // Actualizar en BD
-          connection.query(
+          // Actualizar Básquetbol en BD
+          await connection.query(
             `UPDATE TblPartido SET horario_inicio = ? WHERE id = ?`,
-            [`${nuevoHorario}:00`, partido.id]
+            [`${nuevoHorario}:00`, basquet.id]
           );
+
+          console.log(`✓ Chocolateo: ${futbol.eq1_nombre} vs ${futbol.eq2_nombre} | Futbito(${futbol.horario_actual}) → Basquetbol(${nuevoHorario})`);
 
           actualizacionesRealizadas++;
         }
       }
-    });
+    }
 
     return NextResponse.json({
       success: true,

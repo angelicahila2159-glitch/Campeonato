@@ -5,6 +5,7 @@ import { Partido, useChampionship } from '@/lib/championship-context';
 import { PartidoForm } from '../forms/partido-form';
 import { PartidoList } from '../lists/partido-list';
 import { ResultadoModal } from '../modals/resultado-modal';
+import { CambiarHorarioModal } from '../modals/cambiar-horario-modal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 
@@ -53,7 +54,7 @@ export function PartidosSection() {
   const [showChocolateModal, setShowChocolateModal] = useState(false);
   const [fechasReales, setFechasReales] = useState<Fecha[]>([]);
   const [selectedFechaId, setSelectedFechaId] = useState<string>('');
-  const [selectedDisciplinaId, setSelectedDisciplinaId] = useState<string>('');
+  const [selectedDisciplinaIds, setSelectedDisciplinaIds] = useState<Set<number>>(new Set());
   const [selectedSitioId, setSelectedSitioId] = useState<string>('');
   const [sitios, setSitios] = useState<any[]>([]);
   const [series, setSeries] = useState<any[]>([]);
@@ -79,6 +80,12 @@ export function PartidosSection() {
   const [resultadoLocal, setResultadoLocal] = useState<number>(0);
   const [resultadoVisitante, setResultadoVisitante] = useState<number>(0);
   const [resultadoEstado, setResultadoEstado] = useState<string>('Programado');
+
+  // Estado para cambiar horario
+  const [showCambiarHorarioModal, setShowCambiarHorarioModal] = useState(false);
+  const [partidoParaCambiarHorario, setPartidoParaCambiarHorario] = useState<PartidoDB | null>(null);
+  const [cambiandoHorario, setCambiandoHorario] = useState(false);
+  const [horariosDisponibles, setHorariosDisponibles] = useState<string[]>([]);
 
   // Cargar fechas reales de la API
   useEffect(() => {
@@ -134,8 +141,8 @@ export function PartidosSection() {
         });
 
   const handleGenerateChocolate = async () => {
-    if (!selectedFechaId || !selectedDisciplinaId || !selectedSitioId || selectedSeriesIds.size === 0) {
-      setChocolateError('Selecciona fecha, sitio, disciplina y al menos una serie');
+    if (!selectedFechaId || selectedDisciplinaIds.size === 0 || !selectedSitioId || selectedSeriesIds.size === 0) {
+      setChocolateError('Selecciona fecha, al menos una disciplina, sitio y al menos una serie');
       return;
     }
 
@@ -144,82 +151,105 @@ export function PartidosSection() {
     setGeneratedPartidos([]);
 
     try {
-      const response = await fetch('/api/generar-partidos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fechaId: selectedFechaId,
-          disciplinaId: selectedDisciplinaId,
-          sitioId: selectedSitioId,
-          seriesIds: Array.from(selectedSeriesIds),
-        }),
-      });
+      // Generar partidos para TODAS las disciplinas seleccionadas
+      let todosLosPartidos: any[] = [];
 
-      const data = await response.json();
+      for (const disciplinaId of Array.from(selectedDisciplinaIds)) {
+        const response = await fetch('/api/generar-partidos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fechaId: selectedFechaId,
+            disciplinaId: disciplinaId,
+            sitioId: selectedSitioId,
+            seriesIds: Array.from(selectedSeriesIds),
+          }),
+        });
 
-      if (response.ok) {
-        setGeneratedPartidos(data.data.partidos);
-        
-        // Aplicar chocolateo (escalonar horarios entre disciplinas)
+        const data = await response.json();
+
+        if (response.ok) {
+          todosLosPartidos = todosLosPartidos.concat(data.data.partidos);
+        } else {
+          setChocolateError(`Error generando disciplina ${disciplinaId}: ${data.error}`);
+          setChocolateLoading(false);
+          return;
+        }
+      }
+
+      // MEZCLAR los partidos aleatoriamente
+      const shuffle = (arr: any[]) => {
+        const shuffled = [...arr];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
+      };
+
+      const partidosMezclados = shuffle(todosLosPartidos);
+      setGeneratedPartidos(partidosMezclados);
+
+      // Aplicar chocolateo (escalonar horarios entre disciplinas)
+      try {
+        const chocolateoResponse = await fetch('/api/aplicar-chocolateo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fechaId: selectedFechaId }),
+        });
+
+        const chocolateoData = await chocolateoResponse.json();
+        if (chocolateoData.success) {
+          console.log('✓ Chocolateo aplicado:', chocolateoData.data.actualizacionesRealizadas, 'partidos escalonados');
+        }
+      } catch (error) {
+        console.error('Error aplicando chocolateo:', error);
+      }
+
+      // Detectar equipos sueltos SOLO en las series chocolateadas
+      const sueltosDetectados = [];
+      const seriesIdsParam = Array.from(selectedSeriesIds).join(',');
+      
+      // Necesitamos detectar por cada disciplina
+      for (const disciplinaId of Array.from(selectedDisciplinaIds)) {
         try {
-          const chocolateoResponse = await fetch('/api/aplicar-chocolateo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fechaId: selectedFechaId }),
-          });
-          
-          const chocolateoData = await chocolateoResponse.json();
-          if (chocolateoData.success) {
-            console.log('✓ Chocolateo aplicado:', chocolateoData.data.actualizacionesRealizadas, 'partidos escalonados');
+          const sueltosResponse = await fetch(`/api/equipos-pendientes?fechaId=${selectedFechaId}&disciplinaId=${disciplinaId}&seriesIds=${seriesIdsParam}`);
+          const sueltosData = await sueltosResponse.json();
+          if (sueltosData.success && sueltosData.data.equiposSueltos.length > 0) {
+            sueltosDetectados.push(...sueltosData.data.equiposSueltos);
           }
         } catch (error) {
-          console.error('Error aplicando chocolateo:', error);
+          console.error('Error detectando equipos sueltos:', error);
         }
-        
-        // Detectar equipos sueltos en TODAS las series generadas
-        const sueltosDetectados = [];
-        for (const serieId of selectedSeriesIds) {
-          try {
-            const sueltosResponse = await fetch(`/api/equipos-pendientes?fechaId=${selectedFechaId}&disciplinaId=${selectedDisciplinaId}`);
-            const sueltosData = await sueltosResponse.json();
-            if (sueltosData.success && sueltosData.data.equiposSueltos.length > 0) {
-              sueltosDetectados.push(...sueltosData.data.equiposSueltos);
-            }
-          } catch (error) {
-            console.error('Error detectando equipos sueltos:', error);
-          }
-        }
-        
-        if (sueltosDetectados.length > 0) {
-          setEquiposSueltos(sueltosDetectados);
-          setShowEquiposSueltosModal(true);
-        }
-        
-        // Recargar la tabla de partidos
-        const refreshResponse = await fetch('/api/partidos');
-        const refreshData = await refreshResponse.json();
-        if (refreshData.success) {
-          setPartidosDB(refreshData.data || []);
-        }
-        
-        // Cerrar el modal automáticamente después de generar exitosamente
-        setTimeout(() => {
-          setShowChocolateModal(false);
-          setSelectedFechaId('');
-          setSelectedDisciplinaId('');
-          setSelectedSitioId('');
-          setSitios([]);
-          setSeries([]);
-          setSelectedSeriesIds(new Set());
-          setGeneratedPartidos([]);
-          setChocolateError('');
-        }, 800);
-      } else {
-        setChocolateError(data.error || 'Error al generar partidos');
       }
+
+      if (sueltosDetectados.length > 0) {
+        setEquiposSueltos(sueltosDetectados);
+        setShowEquiposSueltosModal(true);
+      }
+
+      // Recargar la tabla de partidos
+      const refreshResponse = await fetch('/api/partidos');
+      const refreshData = await refreshResponse.json();
+      if (refreshData.success) {
+        setPartidosDB(refreshData.data || []);
+      }
+
+      // Cerrar el modal automáticamente después de generar exitosamente
+      setTimeout(() => {
+        setShowChocolateModal(false);
+        setSelectedFechaId('');
+        setSelectedDisciplinaIds(new Set());
+        setSelectedSitioId('');
+        setSitios([]);
+        setSeries([]);
+        setSelectedSeriesIds(new Set());
+        setGeneratedPartidos([]);
+        setChocolateError('');
+      }, 800);
     } catch (error) {
       console.error('Error:', error);
-      setChocolateError('Error al generar partidos');
+      setChocolateError(error instanceof Error ? error.message : 'Error al generar partidos');
     } finally {
       setChocolateLoading(false);
     }
@@ -312,6 +342,63 @@ export function PartidosSection() {
     }
   };
 
+  const handleAbrirCambiarHorario = (partido: PartidoDB) => {
+    setPartidoParaCambiarHorario(partido);
+    
+    // Generar horarios disponibles (cada 45 minutos desde 08:00 hasta 18:00)
+    const horarios: string[] = [];
+    for (let h = 8; h < 18; h++) {
+      for (let m = 0; m < 60; m += 45) {
+        horarios.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+      }
+    }
+    setHorariosDisponibles(horarios);
+    setShowCambiarHorarioModal(true);
+  };
+
+  const handleCambiarHorario = async (nuevoHorario: string) => {
+    if (!partidoParaCambiarHorario) return;
+
+    setCambiandoHorario(true);
+    try {
+      // Formatear horario a HH:MM:SS
+      const horarioFormato = `${nuevoHorario}:00`;
+
+      const response = await fetch('/api/cambiar-horario', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          partidoId: partidoParaCambiarHorario.id,
+          nuevoHorario: horarioFormato,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Actualizar la tabla de partidos
+        setPartidosDB(
+          partidosDB.map(p =>
+            p.id === partidoParaCambiarHorario.id
+              ? { ...p, horario_inicio: horarioFormato }
+              : p
+          )
+        );
+
+        setShowCambiarHorarioModal(false);
+        setPartidoParaCambiarHorario(null);
+        alert('Horario actualizado correctamente');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Error cambiando horario:', error);
+      alert('Error al cambiar el horario');
+    } finally {
+      setCambiandoHorario(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -396,45 +483,36 @@ export function PartidosSection() {
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Selecciona una Disciplina
+                  Selecciona Disciplinas
                 </label>
-                <select
-                  value={selectedDisciplinaId}
-                  onChange={async (e) => {
-                    setSelectedDisciplinaId(e.target.value);
-                    setSitios([]);
-                    setSeries([]);
-                    setSelectedSitioId('');
-                    setSelectedSeriesIds(new Set());
-                    
-                    // Cargar sitios para la disciplina seleccionada
-                    if (e.target.value) {
-                      setSitiosLoading(true);
-                      try {
-                        const response = await fetch(`/api/sitios?disciplinaId=${e.target.value}`);
-                        const data = await response.json();
-                        if (data.success) {
-                          setSitios(data.data || []);
-                        }
-                      } catch (error) {
-                        console.error('Error cargando sitios:', error);
-                      } finally {
-                        setSitiosLoading(false);
-                      }
-                    }
-                  }}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                >
-                  <option value="">-- Selecciona una disciplina --</option>
+                <div className="space-y-2 p-3 border border-slate-300 rounded-lg bg-slate-50">
                   {disciplinas.map(disciplina => (
-                    <option key={disciplina.id} value={String(disciplina.id)}>
-                      {disciplina.nombre}
-                    </option>
+                    <label key={disciplina.id} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedDisciplinaIds.has(disciplina.id)}
+                        onChange={(e) => {
+                          const newIds = new Set(selectedDisciplinaIds);
+                          if (e.target.checked) {
+                            newIds.add(disciplina.id);
+                          } else {
+                            newIds.delete(disciplina.id);
+                          }
+                          setSelectedDisciplinaIds(newIds);
+                          setSitios([]);
+                          setSeries([]);
+                          setSelectedSitioId('');
+                          setSelectedSeriesIds(new Set());
+                        }}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-slate-700">{disciplina.nombre}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
 
-              {selectedDisciplinaId && sitios.length > 0 && (
+              {selectedDisciplinaIds.size > 0 && sitios.length > 0 && (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
                     Selecciona el Sitio
@@ -445,31 +523,33 @@ export function PartidosSection() {
                       setSelectedSitioId(e.target.value);
                       setSelectedSeriesIds(new Set());
                       
-                      // Cargar series disponibles que tengan equipos en esta disciplina
-                      if (e.target.value && selectedDisciplinaId) {
+                      // Cargar series disponibles que tengan equipos en las disciplinas seleccionadas
+                      if (e.target.value && selectedDisciplinaIds.size > 0) {
                         try {
-                          // Obtener equipos en esta disciplina para saber qué series existen
-                          const response = await fetch(`/api/equipos?disciplinaId=${selectedDisciplinaId}`);
-                          const data = await response.json();
-                          if (data.success && data.data) {
-                            // Extraer series únicas de los equipos
-                            const uniqueSeriesIds = new Set<number>();
-                            data.data.forEach((ed: any) => {
-                              if (ed.serie_id) {
-                                uniqueSeriesIds.add(ed.serie_id);
-                              }
-                            });
-                            
-                            // Obtener todas las series
-                            const seriesResponse = await fetch('/api/series');
-                            const seriesData = await seriesResponse.json();
-                            if (seriesData.success && seriesData.data) {
-                              // Filtrar solo las series que tienen equipos en esta disciplina
-                              const filteredSeries = seriesData.data.filter((s: any) => 
-                                uniqueSeriesIds.has(s.id)
-                              );
-                              setSeries(filteredSeries);
+                          // Obtener equipos para todas las disciplinas seleccionadas
+                          const allSeries = new Set<number>();
+                          for (const disciplinaId of Array.from(selectedDisciplinaIds)) {
+                            const response = await fetch(`/api/equipos?disciplinaId=${disciplinaId}`);
+                            const data = await response.json();
+                            if (data.success && data.data) {
+                              // Extraer series únicas de los equipos
+                              data.data.forEach((ed: any) => {
+                                if (ed.serie_id) {
+                                  allSeries.add(ed.serie_id);
+                                }
+                              });
                             }
+                          }
+                          
+                          // Obtener todas las series
+                          const seriesResponse = await fetch('/api/series');
+                          const seriesData = await seriesResponse.json();
+                          if (seriesData.success && seriesData.data) {
+                            // Filtrar solo las series que tienen equipos en alguna disciplina
+                            const filteredSeries = seriesData.data.filter((s: any) => 
+                              allSeries.has(s.id)
+                            );
+                            setSeries(filteredSeries);
                           }
                         } catch (error) {
                           console.error('Error cargando series:', error);
@@ -554,7 +634,7 @@ export function PartidosSection() {
               <div className="flex gap-2">
                 <Button
                   onClick={handleGenerateChocolate}
-                  disabled={chocolateLoading || !selectedFechaId || !selectedDisciplinaId || !selectedSitioId || selectedSeriesIds.size === 0}
+                  disabled={chocolateLoading || !selectedFechaId || selectedDisciplinaIds.size === 0 || !selectedSitioId || selectedSeriesIds.size === 0}
                   className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
                 >
                   {chocolateLoading ? 'Generando...' : '🍫 Generar Partidos'}
@@ -563,7 +643,7 @@ export function PartidosSection() {
                   onClick={() => {
                     setShowChocolateModal(false);
                     setSelectedFechaId('');
-                    setSelectedDisciplinaId('');
+                    setSelectedDisciplinaIds(new Set());
                     setSelectedSitioId('');
                     setSitios([]);
                     setSeries([]);
@@ -851,6 +931,13 @@ export function PartidosSection() {
                         >
                           Actualizar
                         </button>
+                        <button
+                          onClick={() => handleAbrirCambiarHorario(partido)}
+                          className="text-orange-600 hover:text-orange-800 font-medium text-sm"
+                          title="Cambiar el horario del partido"
+                        >
+                          ⏰ Cambiar Horario
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -860,6 +947,26 @@ export function PartidosSection() {
           )}
         </CardContent>
       </Card>
+
+      {/* Modal para cambiar horario */}
+      {showCambiarHorarioModal && partidoParaCambiarHorario && (
+        <CambiarHorarioModal
+          isOpen={showCambiarHorarioModal}
+          onClose={() => {
+            setShowCambiarHorarioModal(false);
+            setPartidoParaCambiarHorario(null);
+          }}
+          onConfirm={handleCambiarHorario}
+          partido={{
+            id: partidoParaCambiarHorario.id,
+            equipo1_nombre: partidoParaCambiarHorario.equipo1_nombre,
+            equipo2_nombre: partidoParaCambiarHorario.equipo2_nombre,
+            horario_actual: partidoParaCambiarHorario.horario_inicio || '-- : --',
+          }}
+          horariosDisponibles={horariosDisponibles}
+          loading={cambiandoHorario}
+        />
+      )}
     </div>
   );
 }

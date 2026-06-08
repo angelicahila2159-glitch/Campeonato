@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const fechaId = searchParams.get('fechaId');
     const disciplinaId = searchParams.get('disciplinaId');
+    const seriesIds = searchParams.get('seriesIds'); // Nuevo: recibir las series chocolateadas
 
     if (!fechaId || !disciplinaId) {
       return NextResponse.json(
@@ -25,9 +26,8 @@ export async function GET(request: NextRequest) {
 
     connection = await mysql.createConnection(dbConfig);
 
-    // Obtener equipos que jugaron en esta fecha
-    const [equiposQueJugaron] = await connection.query(
-      `SELECT DISTINCT 
+    let query = `
+      SELECT DISTINCT 
         CASE 
           WHEN equipo1_id = equipo2_id THEN equipo1_id
           ELSE NULL
@@ -41,19 +41,42 @@ export async function GET(request: NextRequest) {
       UNION ALL
       SELECT DISTINCT equipo2_id as equipo_id
       FROM TblPartido
-      WHERE fecha_id = ? AND disciplina_id = ? AND equipo1_id != equipo2_id`,
-      [fechaId, disciplinaId, fechaId, disciplinaId, fechaId, disciplinaId]
-    );
+      WHERE fecha_id = ? AND disciplina_id = ? AND equipo1_id != equipo2_id
+    `;
 
-    // Obtener TODOS los equipos en esta disciplina
-    const [todosEquipos] = await connection.query(
-      `SELECT DISTINCT e.id, e.nombre
-      FROM TblEquipo e
-      JOIN TblEquipoDisciplina ed ON e.id = ed.equipo_id
-      WHERE ed.disciplina_id = ? AND e.activa = TRUE
-      ORDER BY e.nombre`,
-      [disciplinaId]
-    );
+    const params: any[] = [fechaId, disciplinaId, fechaId, disciplinaId, fechaId, disciplinaId];
+
+    // Obtener equipos que jugaron en esta fecha
+    const [equiposQueJugaron] = await connection.query(query, params);
+
+    // Obtener SOLO los equipos de las SERIES CHOCOLATEADAS
+    let todosEquipos;
+    if (seriesIds) {
+      // Si se especificaron series, obtener equipos solo de esas series
+      const seriesArray = seriesIds.split(',').map((id: string) => parseInt(id));
+      const placeholders = seriesArray.map(() => '?').join(',');
+      
+      const [result] = await connection.query(
+        `SELECT DISTINCT e.id, e.nombre
+        FROM TblEquipo e
+        JOIN TblEquipoDisciplina ed ON e.id = ed.equipo_id
+        WHERE ed.disciplina_id = ? AND e.activa = TRUE AND ed.serie_id IN (${placeholders})
+        ORDER BY e.nombre`,
+        [disciplinaId, ...seriesArray]
+      );
+      todosEquipos = result;
+    } else {
+      // Si no se especificaron series, obtener todos (compatibilidad hacia atrás)
+      const [result] = await connection.query(
+        `SELECT DISTINCT e.id, e.nombre
+        FROM TblEquipo e
+        JOIN TblEquipoDisciplina ed ON e.id = ed.equipo_id
+        WHERE ed.disciplina_id = ? AND e.activa = TRUE
+        ORDER BY e.nombre`,
+        [disciplinaId]
+      );
+      todosEquipos = result;
+    }
 
     // Equipos que NO jugaron = equipos sin pareja
     const equiposQueJugaronIds = new Set();
