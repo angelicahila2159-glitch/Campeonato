@@ -202,18 +202,11 @@ export async function POST(request: NextRequest) {
     for (const [serieId, equiposEnSerie] of seriesMap.entries()) {
       const serieName = serieNamesMap.get(serieId) || '';
       
-      // Hacer shuffle de los equipos SOLO para Futbito
-      const shuffleArray = (arr: any[]): any[] => {
-        const shuffled = [...arr];
-        for (let i = shuffled.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-        }
-        return shuffled;
-      };
+      // Hacer shuffle de los equipos SIEMPRE para generar matchups aleatorios
+      // Nota: Para Basquetbol, el sistema buscará estos matchups exactos en BD después
+      const equiposMezclados = shuffleArray(equiposEnSerie);
       
-      // SOLO shuffle para Futbito - Basquetbol mantiene el mismo orden para encontrar matchups en BD
-      const equiposMezclados = disciplinaNombre === 'Futbito' ? shuffleArray(equiposEnSerie) : equiposEnSerie;
+      console.log(`📌 ${disciplinaNombre} - ${serieName}: Equipos mezclados = [${equiposMezclados.map(e => e.nombre).join(', ')}]`);
 
       if (tipoCompeticion === 'puntos') {
         // Para puntos, cada equipo es un "turno" individual
